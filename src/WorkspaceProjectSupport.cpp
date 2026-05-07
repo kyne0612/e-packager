@@ -15,6 +15,7 @@
 #include <vector>
 
 #include "..\thirdparty\json.hpp"
+#include "PathHelper.h"
 
 #pragma comment(lib, "Advapi32.lib")
 
@@ -329,7 +330,10 @@ json BuildInfoJson(const SourceFileInfo& info, const WorkspaceWriteOptions& opti
 	return infoJson;
 }
 
-std::string BuildAgentsMarkdown(const SourceFileInfo& info, const WorkspaceWriteOptions& options)
+std::string BuildAgentsMarkdown(
+	const SourceFileInfo& info,
+	const std::filesystem::path& outputDir,
+	const WorkspaceWriteOptions& options)
 {
 	const bool isEcProject = IsEcSourceFileKind(info.sourceFileKind);
 	const std::wstring headerDirectoryLine = isEcProject
@@ -340,6 +344,52 @@ std::string BuildAgentsMarkdown(const SourceFileInfo& info, const WorkspaceWrite
 		: L"- `ecom/`：当前工程引用的易模块工作区副本，仅供查阅、检索与辅助编辑。\r\n"
 		  L"- `elib/`：当前工程依赖支持库的公开接口导出文本，仅供查阅与 AI 理解，不参与回包。\r\n";
 	const std::wstring infoJsonSourceType = isEcProject ? L".ec" : L".e";
+	const std::vector<std::filesystem::path> eLanguageBaseDirs = GetRegisteredEplOpenCommandBaseDirs();
+	std::wstring eLanguagePathLines;
+	if (!eLanguageBaseDirs.empty()) {
+		eLanguagePathLines += L"- 当前机器探测到的易语言安装目录候选：\r\n";
+		for (const auto& baseDir : eLanguageBaseDirs) {
+			eLanguagePathLines += L"  - `" + Utf8ToWide(PathToUtf8(baseDir)) + L"`\r\n";
+		}
+	}
+	else {
+		eLanguagePathLines += L"- 当前机器未能从注册表自动探测到易语言安装目录；建议检查 `HKEY_CLASSES_ROOT\\E.Document\\Shell\\Open\\Command` 或 `HKEY_LOCAL_MACHINE\\SOFTWARE\\Classes\\E.Document\\Shell\\Open\\Command` 的默认值。\r\n";
+	}
+	const bool hasAutoLinker = std::filesystem::exists(outputDir / "lib" / "AutoLinker.fne");
+	const std::wstring autoLinkerSection =
+		std::wstring(L"## 无头编译\r\n"
+		L"\r\n"
+		L"- 前提：如果当前目录存在 `lib/AutoLinker.fne`，并且易语言已成功加载 AutoLinker，则可优先使用 AutoLinker 的无头编译链路验证回包结果。\r\n") +
+		(hasAutoLinker
+			? L"- 当前目录已检测到 `lib/AutoLinker.fne`。\r\n"
+			: L"- 当前目录暂未检测到 `lib/AutoLinker.fne`；如后续补入该文件，可直接使用下面的命令格式。\r\n") +
+		L"- 使用方法参考 `D:\\git\\AutoLinker`。\r\n"
+		L"\r\n"
+		L"推荐使用启动器方式处理启动早期弹窗：\r\n"
+		L"\r\n"
+		L"```powershell\r\n"
+		L"D:\\git\\AutoLinker\\bin\\fne_release\\AutoLinkerTest.exe headless-compile `\r\n"
+		L"  \"<从注册表获取到的易语言主程序路径>\" `\r\n"
+		L"  \"D:\\demo\\demo.e\" `\r\n"
+		L"  \"D:\\demo\\build\\demo.exe\" `\r\n"
+		L"  --target auto --static `\r\n"
+		L"  --result \"D:\\demo\\build\\compile-result.json\" `\r\n"
+		L"  --timeout 120\r\n"
+		L"```\r\n"
+		L"\r\n"
+		L"也可以直接启动易语言主程序：\r\n"
+		L"\r\n"
+		L"```powershell\r\n"
+		L"\"<从注册表获取到的易语言主程序路径>\" `\r\n"
+		L"  \"D:\\demo\\demo.e\" `\r\n"
+		L"  --autolinker-headless-compile `\r\n"
+		L"  --autolinker-output \"D:\\demo\\build\\demo.exe\" `\r\n"
+		L"  --autolinker-target auto `\r\n"
+		L"  --autolinker-result \"D:\\demo\\build\\compile-result.json\"\r\n"
+		L"```\r\n"
+		L"\r\n"
+		L"优先使用 `AutoLinkerTest headless-compile` 处理启动早期弹窗；仅在需要时再用直接参数方式。\r\n"
+		L"\r\n";
 	std::wstring packOutputFileName = Utf8ToWide(options.defaultPackOutputFileName);
 	if (packOutputFileName.empty()) {
 		if (!info.fileName.empty()) {
@@ -372,6 +422,12 @@ std::string BuildAgentsMarkdown(const SourceFileInfo& info, const WorkspaceWrite
 		<< L"- `audio/`：音频资源及 `list.json`。\r\n"
 		<< L"- `tool/`：当前目录自带的 `e-packager.exe`。\r\n"
 		<< L"- `info.json`：记录本目录来源 `" << infoJsonSourceType << L"` 的文件名、路径、类型、修改时间、尺寸、MD5。\r\n"
+		<< L"\r\n"
+		<< L"## 易语言路径\r\n"
+		<< L"\r\n"
+		<< L"- 当前易语言主程序路径通常从注册表读取：`HKEY_CLASSES_ROOT\\E.Document\\Shell\\Open\\Command`，以及兼容视图下的 `HKEY_LOCAL_MACHINE\\SOFTWARE\\Classes\\E.Document\\Shell\\Open\\Command`。\r\n"
+		<< L"- 解析方式是读取默认值中的命令行，再提取其中的可执行文件路径并取目录。\r\n"
+		<< eLanguagePathLines
 		<< L"\r\n"
 		<< L"## 易语言基础约定\r\n"
 		<< L"\r\n"
@@ -447,6 +503,7 @@ std::string BuildAgentsMarkdown(const SourceFileInfo& info, const WorkspaceWrite
 		<< L"- 新增源码页后，不需要手动编辑窗口列表页或其它目录索引；`pack` 时会自动扫描 `src/**/*.txt`（排除 `src/.数据类型.txt`、`src/.DLL声明.txt`、`src/.常量.txt`、`src/.全局变量.txt` 这些固定文件）以及 `src/**/*.xml`。\r\n"
 		<< L"- 新增完成后，立即运行 `tool\\\\e-packager.exe` 或 `tool\\\\e-packager.exe pack . .\\\\pack\\\\" << Utf8ToWide(info.fileName) << L"` 做一次封包验证，尽早发现语法错误、窗口绑定错误或名称链接错误。\r\n"
 		<< L"\r\n"
+		<< autoLinkerSection
 		<< L"## 代码格式要求\r\n"
 		<< L"\r\n"
 		<< L"- 保持一条逻辑语句一行，不要把多行代码压成一行。\r\n"
@@ -656,7 +713,7 @@ bool WriteWorkspaceFiles(
 	}
 
 	if (options.writeAgentsMarkdown) {
-		if (!WriteUtf8TextFileBom(outputDir / "AGENTS.md", BuildAgentsMarkdown(info, options))) {
+		if (!WriteUtf8TextFileBom(outputDir / "AGENTS.md", BuildAgentsMarkdown(info, outputDir, options))) {
 			outError = "write_agents_md_failed: " + PathToUtf8(outputDir / "AGENTS.md");
 			return false;
 		}
